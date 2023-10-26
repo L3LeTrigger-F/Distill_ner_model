@@ -19,7 +19,7 @@
      原模型推理时间：0.050878047943115234 秒  
   4、student_model模型层：一层embedding+两层transformer+一层linear 
      loss函数：cross_entropy(学生模型标签预测值，教师标签值)+mse_loss(预训练模型bert输出层的值,学生模型的transformer层输出)  
-  待解决：
+  待解决：torch-crf层的推理
      
      
      
