@@ -145,7 +145,7 @@ def get_onnx():
                   #  "/home/lhl/nlp/distill/model/aa_try.onnx",
                    opset_version=11,
                    input_names=["input"],
-                   output_names=["output"],  # the model's output names
+                   output_names=["output1","outputs2","predicted_label"],  # the model's output names
                    dynamic_axes={'input': {0:'batch_size',1:'seq_length'}}
         )
 # 加载模型
@@ -187,14 +187,16 @@ def inference_model():
     # print(aa)
     # output_tensors = session.get_outputs()[0].name
     input_name = session.get_inputs()[0].name
-    output_name = session.get_outputs()[0].name
-    print(input_name)
-    print(output_name)
+    output1 = session.get_outputs()[0].name
+    output2=session.get_outputs()[1].name
+    output3=session.get_outputs()[2].name
+    # print(input_name)
+    # print(output_name)
     # input_name='input'
     # output_name='output'
-    a= session.run([output_name], {input_name:token_ids})
+    a= session.run([output1,output2,output3], {input_name:token_ids})
     # output_data = output[0]
-    print(a)
+    print(a[2])
 
 inference_model()
 # netron.start("/home/lhl/nlp/distill/model/ner_distill_model.onnx")
