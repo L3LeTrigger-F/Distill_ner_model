@@ -1,0 +1,2 @@
+# Distill_ner_model
+对roberta-base-finetuned-cluener2020-chinese预训练模型做模型蒸馏并用onnx加速模型推理
