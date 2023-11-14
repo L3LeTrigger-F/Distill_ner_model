@@ -1,3 +1,9 @@
+#!/usr/bin/env python
+# encoding: utf-8  
+"""
+@file: main.py
+@description: 执行入口函数
+"""
 import torch
 from transformers import AutoTokenizer
 from get_data import load_data,NERDataset,make_ner,get_ner
@@ -8,8 +14,15 @@ import logging
 from tqdm import tqdm
 from torch.nn.utils.rnn import pad_sequence
 from uer.roberta_crf import TeacherModel,TransformerCRF
-#应该怎么写？？
-##将id转成label。这个顺序不一样
+def integer_to_one_hot(label, num_classes):
+    batch_size=label.size(dim=0)
+    seq_length=label.size(dim=1)
+    one_hot=np.zeros((batch_size,seq_length,num_classes))
+    for i in range(batch_size):
+        for j in range(seq_length):
+            one_hot[i][j][label[i][j]]=1
+    return torch.tensor(one_hot)
+
 label2id={
         'O': 0, 
     'B-address': 1, 
@@ -48,12 +61,11 @@ id2label = {_id: _label for _label, _id in list(label2id.items())}
 
 # 配置日志记录
 logging.basicConfig(filename='training.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+#对齐数据长度
 def collate_fn(batch):
     input_ids_batch = []
     label_ids_batch = []
     mask_ids_batch=[]
-    # Find the maximum sequence length in the batch
-    # max_len = max(len(inputs[0]) for inputs in batch)
     max_len=64
     # Pad sequences to the maximum length
     for inputs in batch:
@@ -63,7 +75,7 @@ def collate_fn(batch):
         label_ids_batch.append(label_ids)
         mask_ids_batch.append([1]*len(input_ids_batch))
     padded_sentences = []
-    # Pad sequences to length 128 #和这个有关系
+    # Pad sequences to length 128 
     padded_input_ids = pad_sequence([torch.tensor(ids+ [0] * (max_len - len(ids))) for ids in input_ids_batch], batch_first=True)
     # padded_attention_mask = pad_sequence([torch.tensor(ids) + [0] * (128 - len(ids)) for ids in attention_mask_batch], batch_first=True)
     padded_label_ids = pad_sequence([torch.tensor(ids + [31] * (max_len - len(ids)))  for ids in label_ids_batch], batch_first=True)
@@ -82,8 +94,10 @@ def evaluate(model, dataloader,ways):
         if ways=="teacher":
             logits,predicted= model(inputs)
         elif ways=="student":
+            '''有crf层的
             logits,loss,predicted= model(inputs,labels)
-        
+            '''
+            logits,loss,predicted =model(inputs,labels,False)
         # 计算预测值和标签的准确率、召回率、精确率和F1分数
         for pp in predicted:
             predicted_list.extend(pp)
@@ -114,9 +128,8 @@ def evaluate(model, dataloader,ways):
         print(f"student_model's no_zero_Accuracy: {no_zero_accuracy:.4f}")
         print(f"student_model's zero_Accuracy: {zero_accuracy:.4f}")
     return accuracy
-# load_model()
-train_data=load_data('/home/lhl/nlp/distill/dataset/train.txt')
-valid_data=load_data('/home/lhl/nlp/distill/dataset/dev.txt')
+train_data=load_data('/home/lhl/nlp/Distill_ner_model/dataset/train.txt')
+valid_data=load_data('/home/lhl/nlp/Distill_ner_model/dataset/dev.txt')
 # Load RoBERTa tokenizer and model
 tokenizer = AutoTokenizer.from_pretrained('uer/roberta-base-finetuned-cluener2020-chinese')
 #student数值需要
@@ -125,18 +138,17 @@ num_layers = 2
 hidden_size = 768
 num_heads = 4
 dropout = 0.1
-alpha=0.5
+alpha=1
 epochs=100
 seq="我家住在徐汇区虹漕路461号58号楼5楼"
-model_name="/home/lhl/nlp/distill/model/student_model.pt"
-get_ner(seq,tokenizer,model_name,id2label,"student")
+model_name="/home/lhl/nlp/Distill_ner_model/model/student_model.pt"
+# get_ner(seq,tokenizer,model_name,id2label,"student")
 teacher_model = TeacherModel()
 print(teacher_model)
 # for name, _ in teacher_model.named_parameters():
     # print(name)
 student_model=TransformerCRF(num_classes, num_layers, hidden_size, num_heads, dropout)
-# student_model.load_state_dict(torch.load("/home/lhl/nlp/distill/model/student_only_model.pt"))
-#利用.logits
+# student_model.load_state_dict(torch.load("/home/lhl/nlp/Distill_ner_model/model/student_only_model.pt"))
 teacher_model.eval()
 student_model.train()
 # Create NERDataset instance
@@ -153,10 +165,12 @@ ce_loss = nn.NLLLoss()#标签之间的差别
 mse_loss = nn.MSELoss()#教师和学生之间的差别
 cros_loss=torch.nn.CrossEntropyLoss()
 best_accuracy=0.0
+if_crf=False
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 teacher_model.to(device)
 student_model.to(device)
+student_model.load_state_dict(torch.load("/home/lhl/nlp/Distill_ner_model/model/double_loss_no_crf_model.pt"))
 for name,params in teacher_model.named_parameters():
     params.requires_grad = False
 # evaluate(student_model,valid_dataloader,"student")
@@ -174,19 +188,29 @@ for epoch in range(epochs):
         input_ids = input_ids.to(device)
         labels = labels.to(device)
         teacher_logits = teacher_model(input_ids=input_ids)
-        student_logits, crf_loss, tags = student_model(input_ids=input_ids, labels=labels)
+        if if_crf==True:
+            student_logits, crf_loss, tags = student_model(input_ids=input_ids, labels=labels,if_crf=True)
+        elif if_crf==False:
+            student_logits,logits,tags= student_model(input_ids=input_ids, labels=labels,if_crf=False)
         # student_loss= student_model(input_ids=input_ids, labels=labels)
         student_loss=mse_loss(teacher_logits, student_logits)
-        loss = alpha * crf_loss + (1 - alpha) * student_loss
-        # loss=cros_loss(student_loss,labels)
+        one_hot_labels=integer_to_one_hot(labels,32)
+        if if_crf==True:
+            loss = alpha * crf_loss + (1 - alpha) * student_loss
+        elif if_crf==False:
+            one_hot_labels=one_hot_labels.to(device)
+            cros = cros_loss(logits,one_hot_labels)#(64,64,32)
+            loss = alpha *cros  + (1 - alpha) * student_loss
         losses.append(loss.item())
-        crf_list.append(crf_loss.item())
-        student_list.append(student_loss.item())
+        # crf_list.append(crf_loss.item())
+        # student_list.append(student_loss.item())
         loss.backward()
         optimizer.step()
             # 记录训练结果到日志
-        logging.info(f"Epoch {epoch} - loss: {np.mean(losses)}, crf_loss: {np.mean(crf_list)}, student_loss: {np.mean(student_list)}")
-        progress_bar.set_postfix({"loss": np.mean(losses),"crf_loss": np.mean(crf_list),"student_loss": np.mean(student_list)})
+        # logging.info(f"Epoch {epoch} - loss: {np.mean(losses)}, crf_loss: {np.mean(crf_list)}, student_loss: {np.mean(student_list)}")
+        logging.info(f"Epoch {epoch} - loss: {np.mean(losses)}")
+        # progress_bar.set_postfix({"loss": np.mean(losses),"crf_loss": np.mean(crf_list),"student_loss": np.mean(student_list)})
+        progress_bar.set_postfix({"loss": np.mean(losses)})    
     if epoch%5==0:
         # print("crf_loss:",crf_list)
         # print("logits_loss",student_loss)
@@ -196,6 +220,6 @@ for epoch in range(epochs):
         if best_accuracy<accuracy:
             best_accuracy = accuracy
             # 保存模型
-            torch.save(student_model.state_dict(), "/home/lhl/nlp/distill/model/student_only_model.pt")
+            torch.save(student_model.state_dict(), "/home/lhl/nlp/Distill_ner_model/model/base_no_crf_model.pt")
 logging.shutdown()
 print("Training complete.")
